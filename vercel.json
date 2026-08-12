@@ -1,5 +1,5 @@
 {
-  "installCommand": "npm --prefix Thoongathada install",
-  "buildCommand": "npm run vercel-build",
-  "outputDirectory": "Thoongathada/dist"
+  "framework": "nextjs",
+  "installCommand": "npm install",
+  "buildCommand": "npm run build"
 }
