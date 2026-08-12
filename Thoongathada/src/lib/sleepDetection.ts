@@ -18,7 +18,7 @@ export type SmoothedEyeState = {
 export function smoothEyeSamples(samples: EyeSample[]): SmoothedEyeState {
   const visible = samples.filter((sample) => sample.faceDetected);
 
-  if (visible.length < 3) {
+  if (visible.length < 2) {
     return {
       bothClosed: false,
       bothOpen: false,
@@ -34,7 +34,7 @@ export function smoothEyeSamples(samples: EyeSample[]): SmoothedEyeState {
   const rightOpenVotes = recent.filter((sample) => !sample.rightClosed).length;
 
   return {
-    bothClosed: leftClosedVotes >= 3 && rightClosedVotes >= 3,
+    bothClosed: leftClosedVotes >= 2 && rightClosedVotes >= 2,
     bothOpen: leftOpenVotes >= 3 && rightOpenVotes >= 3,
     leftClosed: leftClosedVotes >= 3,
     rightClosed: rightClosedVotes >= 3
