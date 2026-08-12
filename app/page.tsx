@@ -15,6 +15,7 @@ const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-r
 const CLOSED_DURATION_MS = 1000;
 const DEFAULT_BLINK_THRESHOLD = 0.32;
 const DEFAULT_EAR_THRESHOLD = 0.2;
+const FRAME_STUCK_MS = 900;
 
 type Screen = "landing" | "camera" | "error";
 type Sample = { leftClosed: boolean; rightClosed: boolean; faceDetected: boolean };
@@ -74,6 +75,7 @@ export default function Page() {
   const closedSinceRef = useRef<number | null>(null);
   const triggeredRef = useRef(false);
   const lastInferenceRef = useRef(0);
+  const lastFaceUpdateRef = useRef(0);
   const lastVideoTimeRef = useRef(-1);
   const calibrationRef = useRef({
     start: null as number | null,
@@ -251,6 +253,15 @@ export default function Page() {
           calibrating: !calibration.done,
           calibrationProgress: calibration.start ? Math.min(1, (now - calibration.start) / 2000) : 0
         }));
+        lastFaceUpdateRef.current = now;
+      } else if (screen === "camera" && stream && tracking.modelStatus === "ready" && now - lastFaceUpdateRef.current > FRAME_STUCK_MS) {
+        setTracking((value) => ({
+          ...value,
+          faceDetected: false,
+          leftClosed: false,
+          rightClosed: false,
+          closedDuration: 0
+        }));
       }
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -305,6 +316,7 @@ export default function Page() {
       if (event.key.toLowerCase() === "d") setDebug((value) => !value);
       if (event.key.toLowerCase() === "f") void toggleFullscreen();
       if (event.key.toLowerCase() === "r") setAttempts(0);
+      if (event.key.toLowerCase() === "t") triggerSleepAlert();
     };
     document.addEventListener("fullscreenchange", onFullscreen);
     window.addEventListener("keydown", onKey);
@@ -313,7 +325,7 @@ export default function Page() {
       window.removeEventListener("keydown", onKey);
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [stream]);
+  }, [stream, triggerSleepAlert]);
 
   const message = useMemo(() => roastForAttempt(attempts), [attempts]);
 
@@ -349,6 +361,7 @@ export default function Page() {
           {!fullscreen && <button className="help-button" onClick={() => setShowHelp((value) => !value)} aria-label="Show keyboard controls">?</button>}
           <div className="bottom-nudge overlay-text">don't sleep 💀</div>
           {tracking.modelStatus === "loading" && <div className="center-hint">teaching the laptop how to watch you...</div>}
+          {tracking.modelStatus === "error" && <div className="center-hint danger">model load failed. press T to test video.</div>}
           {tracking.calibrating && tracking.modelStatus === "ready" && (
             <div className="calibration-hint">
               <span>look at the screen 👀</span>
@@ -356,7 +369,7 @@ export default function Page() {
             </div>
           )}
           {stream && !tracking.faceDetected && !tracking.calibrating && tracking.modelStatus === "ready" && <div className="center-hint">where did you go 👀</div>}
-          {showHelp && <div className="shortcuts"><b>keys</b><span>F fullscreen</span><span>D debug</span><span>R reset counter</span></div>}
+          {showHelp && <div className="shortcuts"><b>keys</b><span>F fullscreen</span><span>D debug</span><span>R reset counter</span><span>T test roast</span></div>}
         </section>
       )}
       <div className={`interruption ${alertActive || flash || roast ? "show" : ""}`}>
