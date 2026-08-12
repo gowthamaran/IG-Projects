@@ -1,0 +1,5 @@
+{
+  "installCommand": "npm --prefix Thoongathada install",
+  "buildCommand": "npm run vercel-build",
+  "outputDirectory": "Thoongathada/dist"
+}
