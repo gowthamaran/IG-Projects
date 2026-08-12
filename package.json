@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "scripts": {
+    "vercel-build": "npm --prefix Thoongathada run build"
+  }
+}
