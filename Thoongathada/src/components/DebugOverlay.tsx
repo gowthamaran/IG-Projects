@@ -13,10 +13,13 @@ export function DebugOverlay({ visible, tracking }: DebugOverlayProps) {
       <div>Face detected: {tracking.faceDetected ? "YES" : "NO"}</div>
       <div>Left eye blink score: {tracking.leftBlinkScore.toFixed(3)}</div>
       <div>Right eye blink score: {tracking.rightBlinkScore.toFixed(3)}</div>
+      <div>Left EAR: {tracking.leftEar.toFixed(3)}</div>
+      <div>Right EAR: {tracking.rightEar.toFixed(3)}</div>
       <div>Left eye: {tracking.leftClosed ? "CLOSED" : "OPEN"}</div>
       <div>Right eye: {tracking.rightClosed ? "CLOSED" : "OPEN"}</div>
       <div>Current closed duration: {Math.round(tracking.closedDuration)}ms</div>
-      <div>Trigger threshold: {tracking.triggerThreshold.toFixed(3)}</div>
+      <div>Blink threshold: {tracking.triggerThreshold.toFixed(3)}</div>
+      <div>EAR threshold: {tracking.earThreshold.toFixed(3)}</div>
       <div>FPS: {tracking.fps}</div>
       <div>Model: {tracking.modelStatus}</div>
     </aside>
