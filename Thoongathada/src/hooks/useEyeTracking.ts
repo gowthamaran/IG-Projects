@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import {
   FaceLandmarker,
   FilesetResolver,
-  type Classifications
+  type Classifications,
+  type NormalizedLandmark
 } from "@mediapipe/tasks-vision";
 import {
   CLOSED_DURATION_MS,
@@ -30,6 +31,9 @@ export type EyeTrackingState = {
   bothOpen: boolean;
   closedDuration: number;
   triggerThreshold: number;
+  leftEar: number;
+  rightEar: number;
+  earThreshold: number;
   fps: number;
   calibrating: boolean;
   calibrationProgress: number;
@@ -42,6 +46,9 @@ const MODEL_URL =
 const WASM_URL =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm";
 
+const DEFAULT_BLINK_THRESHOLD = 0.32;
+const DEFAULT_EAR_THRESHOLD = 0.2;
+
 function scoreFor(categories: Classifications[] | undefined, name: string) {
   for (const classification of categories ?? []) {
     const found = classification.categories.find((category) => category.categoryName === name);
@@ -49,6 +56,24 @@ function scoreFor(categories: Classifications[] | undefined, name: string) {
   }
 
   return 0;
+}
+
+function distance(a: NormalizedLandmark, b: NormalizedLandmark) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function eyeAspectRatio(landmarks: NormalizedLandmark[], points: [number, number, number, number, number, number]) {
+  const [outer, upperOuter, upperInner, inner, lowerInner, lowerOuter] = points;
+  const width = distance(landmarks[outer], landmarks[inner]);
+
+  if (!width) return 0;
+
+  const height =
+    (distance(landmarks[upperOuter], landmarks[lowerOuter]) +
+      distance(landmarks[upperInner], landmarks[lowerInner])) /
+    2;
+
+  return height / width;
 }
 
 export function useEyeTracking({
@@ -64,9 +89,19 @@ export function useEyeTracking({
   const lastInferenceRef = useRef(0);
   const lastVideoTimeRef = useRef(-1);
   const samplesRef = useRef<EyeSample[]>([]);
-  const openCalibrationRef = useRef<{ left: number[]; right: number[]; start: number | null }>({
-    left: [],
-    right: [],
+  const openCalibrationRef = useRef<{
+    leftBlink: number[];
+    rightBlink: number[];
+    leftEar: number[];
+    rightEar: number[];
+    start: number | null;
+    done: boolean;
+  }>({
+    leftBlink: [],
+    rightBlink: [],
+    leftEar: [],
+    rightEar: [],
+    done: false,
     start: null
   });
   const closedSinceRef = useRef<number | null>(null);
@@ -83,7 +118,10 @@ export function useEyeTracking({
     rightClosed: false,
     bothOpen: false,
     closedDuration: 0,
-    triggerThreshold: 0.48,
+    triggerThreshold: DEFAULT_BLINK_THRESHOLD,
+    leftEar: 0,
+    rightEar: 0,
+    earThreshold: DEFAULT_EAR_THRESHOLD,
     fps: 0,
     calibrating: false,
     calibrationProgress: 0,
@@ -138,10 +176,18 @@ export function useEyeTracking({
   }, []);
 
   const resetCalibration = useCallback(() => {
-    openCalibrationRef.current = { left: [], right: [], start: null };
+    openCalibrationRef.current = {
+      leftBlink: [],
+      rightBlink: [],
+      leftEar: [],
+      rightEar: [],
+      done: false,
+      start: null
+    };
     setState((previous) => ({
       ...previous,
-      triggerThreshold: 0.48,
+      triggerThreshold: DEFAULT_BLINK_THRESHOLD,
+      earThreshold: DEFAULT_EAR_THRESHOLD,
       calibrating: true,
       calibrationProgress: 0
     }));
@@ -151,23 +197,33 @@ export function useEyeTracking({
     if (active && state.modelStatus === "ready") resetCalibration();
   }, [active, resetCalibration, state.modelStatus]);
 
-  const updateCalibration = useCallback((leftScore: number, rightScore: number, now: number) => {
+  const updateCalibration = useCallback(
+    (leftScore: number, rightScore: number, leftEar: number, rightEar: number, now: number) => {
     const calibration = openCalibrationRef.current;
+    if (calibration.done) return state.triggerThreshold;
     if (calibration.start === null) calibration.start = now;
 
     const elapsed = now - calibration.start;
-    calibration.left.push(leftScore);
-    calibration.right.push(rightScore);
+    calibration.leftBlink.push(leftScore);
+    calibration.rightBlink.push(rightScore);
+    if (leftEar > 0) calibration.leftEar.push(leftEar);
+    if (rightEar > 0) calibration.rightEar.push(rightEar);
 
     if (elapsed >= 2000) {
-      const combined = [...calibration.left, ...calibration.right];
+      const combined = [...calibration.leftBlink, ...calibration.rightBlink];
       const averageOpenScore =
         combined.reduce((total, score) => total + score, 0) / Math.max(combined.length, 1);
-      const threshold = Math.min(0.72, Math.max(0.36, averageOpenScore + 0.28));
+      const openEars = [...calibration.leftEar, ...calibration.rightEar];
+      const averageOpenEar =
+        openEars.reduce((total, ear) => total + ear, 0) / Math.max(openEars.length, 1);
+      const threshold = Math.min(0.55, Math.max(0.24, averageOpenScore + 0.18));
+      const earThreshold = Math.min(0.24, Math.max(0.14, averageOpenEar * 0.68));
+      calibration.done = true;
 
       setState((previous) => ({
         ...previous,
         triggerThreshold: threshold,
+        earThreshold,
         calibrating: false,
         calibrationProgress: 1
       }));
@@ -181,7 +237,8 @@ export function useEyeTracking({
     }));
 
     return state.triggerThreshold;
-  }, [state.triggerThreshold]);
+  },
+  [state.triggerThreshold]);
 
   const tick = useCallback(() => {
     const video = videoRef.current;
@@ -209,11 +266,17 @@ export function useEyeTracking({
 
       const result = detector.detectForVideo(video, now);
       const faceDetected = result.faceLandmarks.length > 0;
+      const landmarks = result.faceLandmarks[0] ?? [];
       const leftBlinkScore = faceDetected ? scoreFor(result.faceBlendshapes, "eyeBlinkLeft") : 0;
       const rightBlinkScore = faceDetected ? scoreFor(result.faceBlendshapes, "eyeBlinkRight") : 0;
-      const threshold = faceDetected ? updateCalibration(leftBlinkScore, rightBlinkScore, now) : state.triggerThreshold;
-      const leftClosed = faceDetected && leftBlinkScore > threshold;
-      const rightClosed = faceDetected && rightBlinkScore > threshold;
+      const leftEar = faceDetected ? eyeAspectRatio(landmarks, [33, 160, 158, 133, 153, 144]) : 0;
+      const rightEar = faceDetected ? eyeAspectRatio(landmarks, [362, 385, 387, 263, 373, 380]) : 0;
+      const threshold = faceDetected
+        ? updateCalibration(leftBlinkScore, rightBlinkScore, leftEar, rightEar, now)
+        : state.triggerThreshold;
+      const earThreshold = state.earThreshold;
+      const leftClosed = faceDetected && (leftBlinkScore > threshold || (leftEar > 0 && leftEar < earThreshold));
+      const rightClosed = faceDetected && (rightBlinkScore > threshold || (rightEar > 0 && rightEar < earThreshold));
 
       samplesRef.current = [
         ...samplesRef.current.slice(-(SAMPLE_SIZE - 1)),
@@ -245,6 +308,8 @@ export function useEyeTracking({
         faceDetected,
         leftBlinkScore,
         rightBlinkScore,
+        leftEar,
+        rightEar,
         leftClosed: smoothed.leftClosed,
         rightClosed: smoothed.rightClosed,
         bothOpen: smoothed.bothOpen,
